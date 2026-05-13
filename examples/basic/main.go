@@ -30,11 +30,17 @@ func main() {
 	}()
 
 	flags := client.GetFlags()
-	fmt.Printf("fetched %d flags\n", len(flags))
+	fmt.Printf("fetched %d flags\n", flags.Len())
 
-	if val, ok := client.GetFlag("my-feature"); ok {
-		fmt.Printf("my-feature = %v\n", val)
-	} else {
-		fmt.Println("my-feature not found (no flags loaded yet)")
-	}
+	// Type-safe flag retrieval — no type assertions needed.
+	isNewUI := flags.Bool("my-feature", false)
+	maxRetries := flags.Float64("max-retries", 3.0)
+	welcomeMsg := flags.String("welcome-message", "Welcome!")
+
+	fmt.Printf("my-feature      = %v\n", isNewUI)
+	fmt.Printf("max-retries     = %v\n", maxRetries)
+	fmt.Printf("welcome-message = %v\n", welcomeMsg)
+
+	// Convenience methods directly on the client.
+	fmt.Printf("dark-mode       = %v\n", client.Bool("dark-mode", false))
 }

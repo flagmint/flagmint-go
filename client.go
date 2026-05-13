@@ -92,15 +92,28 @@ func (c *FlagClient) GetFlags() FeatureFlags {
 	return c.flags.Load()
 }
 
-// GetFlag returns the value of a single flag by key.
-// Returns (nil, false) when the key is not present.
-func (c *FlagClient) GetFlag(key string) (FlagValue, bool) {
-	flags := c.flags.Load()
-	if flags == nil {
-		return nil, false
-	}
-	v, ok := flags[key]
-	return v, ok
+// Bool returns the boolean value of flag key, or fallback if the flag is absent
+// or not a bool.
+func (c *FlagClient) Bool(key string, fallback bool) bool {
+	return c.GetFlags().Bool(key, fallback)
+}
+
+// String returns the string value of flag key, or fallback if the flag is absent
+// or not a string.
+func (c *FlagClient) String(key string, fallback string) string {
+	return c.GetFlags().String(key, fallback)
+}
+
+// Float64 returns the numeric value of flag key, or fallback if the flag is absent
+// or not a float64.
+func (c *FlagClient) Float64(key string, fallback float64) float64 {
+	return c.GetFlags().Float64(key, fallback)
+}
+
+// JSON unmarshals a JSON flag configuration into target (must be a pointer).
+// Returns [ErrFlagNotFound] when the key is absent.
+func (c *FlagClient) JSON(key string, target any) error {
+	return c.GetFlags().JSON(key, target)
 }
 
 // SetContext updates the evaluation context and triggers a flag refresh.
@@ -119,12 +132,9 @@ func (c *FlagClient) Close() error {
 
 // handleFlagsUpdated is called by the transport whenever new flags arrive.
 func (c *FlagClient) handleFlagsUpdated(raw map[string]any) {
-	flags := make(FeatureFlags, len(raw))
-	for k, v := range raw {
-		flags[k] = v
-	}
+	flags := NewFeatureFlags(raw)
 	c.flags.Store(flags)
-	c.logger.Info("flagmint: flags updated", "count", len(flags))
+	c.logger.Info("flagmint: flags updated", "count", flags.Len())
 
 	if c.cache != nil {
 		if ctx := c.evalCtx.Load(); ctx != nil {
