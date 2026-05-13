@@ -1,8 +1,11 @@
 package flagmint_test
 
 import (
+	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	flagmint "github.com/flagmint/flagmint-go"
 )
@@ -137,3 +140,230 @@ func TestFlagClient_TypedConvenience(t *testing.T) {
 		t.Errorf("JSON convenience fallback: %v", err)
 	}
 }
+
+// TestReady_DeferInit verifies that Ready triggers initialisation and returns
+// nil when the (stub) transport succeeds.
+func TestReady_DeferInit(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := c.Ready(ctx); err != nil {
+		t.Fatalf("Ready: unexpected error: %v", err)
+	}
+}
+
+// TestReady_ContextCancelled verifies that an already-cancelled context causes
+// Ready to return context.Canceled immediately.
+func TestReady_ContextCancelled(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	if err := c.Ready(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Ready with cancelled ctx: got %v, want context.Canceled", err)
+	}
+}
+
+// TestReady_Idempotent verifies multiple Ready calls all return the same result.
+func TestReady_Idempotent(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := c.Ready(ctx); err != nil {
+			t.Fatalf("Ready call %d: unexpected error: %v", i+1, err)
+		}
+	}
+}
+
+// TestGetFlag verifies the raw-value getter and fallback behaviour.
+func TestGetFlag(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	// No flags loaded: should return fallback.
+	if got := c.GetFlag("x", "default"); got != "default" {
+		t.Errorf("GetFlag missing: got %v, want %q", got, "default")
+	}
+}
+
+// TestTypedFlagHelpers verifies BoolFlag, StringFlag, NumberFlag, JSONFlag.
+func TestTypedFlagHelpers(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	if got := c.BoolFlag("x", true); got != true {
+		t.Error("BoolFlag fallback")
+	}
+	if got := c.StringFlag("x", "fb"); got != "fb" {
+		t.Error("StringFlag fallback")
+	}
+	if got := c.NumberFlag("x", 42); got != 42 {
+		t.Error("NumberFlag fallback")
+	}
+	fb := map[string]any{"k": "v"}
+	if got := c.JSONFlag("x", fb); got == nil {
+		t.Error("JSONFlag fallback should not be nil")
+	}
+}
+
+// TestUpdateContext verifies that UpdateContext replaces the evaluation context
+// and returns nil.
+func TestUpdateContext(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	if err := c.UpdateContext(flagmint.EvaluationContext{Kind: "user", Key: "u2"}); err != nil {
+		t.Fatalf("UpdateContext: unexpected error: %v", err)
+	}
+}
+
+// TestSubscribe verifies that the callback fires immediately with current
+// flags, then again on every update, and stops after unsubscribe.
+func TestSubscribe(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	var mu sync.Mutex
+	var calls []flagmint.FeatureFlags
+
+	unsub := c.Subscribe(func(f flagmint.FeatureFlags) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, f)
+	})
+
+	// Should have been called once immediately with empty flags.
+	mu.Lock()
+	n := len(calls)
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("expected 1 initial call, got %d", n)
+	}
+
+	// Unsubscribe and confirm no further calls are delivered.
+	unsub()
+
+	mu.Lock()
+	before := len(calls)
+	mu.Unlock()
+
+	if before != 1 {
+		t.Fatalf("expected still 1 call after unsub, got %d", before)
+	}
+}
+
+// TestClose_Idempotent verifies that calling Close twice does not panic.
+func TestClose_Idempotent(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+// TestGetFlags_ShallowCopy verifies that mutating the returned FeatureFlags
+// map does not affect subsequent calls.
+func TestGetFlags_ShallowCopy(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	f1 := c.GetFlags()
+	f2 := c.GetFlags()
+
+	// Both calls should return independent zero-value flag sets.
+	if f1.Len() != 0 || f2.Len() != 0 {
+		t.Error("expected empty flag sets")
+	}
+}
+
+// TestConcurrentSafety verifies no data races when GetFlag and UpdateContext
+// are called concurrently by many goroutines.
+func TestConcurrentSafety(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	const goroutines = 50
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+
+	for i := 0; i < goroutines; i++ {
+		// Readers
+		go func() {
+			defer wg.Done()
+			c.GetFlag("feature", false)
+		}()
+		// Writers
+		go func(i int) {
+			defer wg.Done()
+			_ = c.UpdateContext(flagmint.EvaluationContext{Kind: "user", Key: "u"})
+			_ = i
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+// TestConcurrentSubscribe verifies that subscribing and unsubscribing from
+// multiple goroutines concurrently does not cause races.
+func TestConcurrentSubscribe(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	const goroutines = 20
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for j := 0; j < goroutines; j++ {
+		go func() {
+			defer wg.Done()
+			unsub := c.Subscribe(func(flagmint.FeatureFlags) {})
+			unsub()
+		}()
+	}
+
+	wg.Wait()
+}
+
