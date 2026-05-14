@@ -2,6 +2,7 @@ package flagmint
 
 import (
 	"log/slog"
+	"os"
 
 	"github.com/flagmint/flagmint-go/cache"
 )
@@ -17,6 +18,20 @@ const (
 	// TransportLongPolling forces the HTTP long-polling transport.
 	TransportLongPolling TransportMode = "long-polling"
 )
+
+// Environment variable names
+const (
+	EnvFlagmintRestEndpoint = "FLAGMINT_REST_ENDPOINT"
+	EnvFlagmintWSEndpoint   = "FLAGMINT_WS_ENDPOINT"
+	EnvFlagmintEnv          = "FLAGMINT_ENV"
+)
+
+// Environment-specific endpoint defaults
+var envEndpoints = map[string][2]string{
+	"local":   {"http://localhost:3000", "ws://localhost:3000"},
+	"staging": {"https://staging-api.flagmint.com", "wss://staging-api.flagmint.com"},
+	"prod":    {"https://api.flagmint.com", "wss://api.flagmint.com"},
+}
 
 // Option configures the FlagClient. Use With* functions to create options.
 type Option func(*clientConfig)
@@ -35,12 +50,37 @@ type clientConfig struct {
 }
 
 func defaultConfig() clientConfig {
+	rest, ws := getEndpoints()
 	return clientConfig{
 		transportMode: TransportAuto,
-		restEndpoint:  "https://api.flagmint.com",
-		wsEndpoint:    "wss://api.flagmint.com",
+		restEndpoint:  rest,
+		wsEndpoint:    ws,
 		logger:        slog.Default(),
 	}
+}
+
+// getEndpoints returns REST and WebSocket endpoints, checking environment
+// variables and FLAGMINT_ENV in order of precedence.
+func getEndpoints() (rest, ws string) {
+	// 1. Check for explicit endpoint overrides
+	if rest = os.Getenv(EnvFlagmintRestEndpoint); rest != "" {
+		ws = os.Getenv(EnvFlagmintWSEndpoint)
+		if ws == "" {
+			// If only REST is set, derive WS from it
+			ws = "wss://" + rest[8:] // Remove "https://" and add "wss://"
+		}
+		return
+	}
+
+	// 2. Check for environment name (local, staging, prod)
+	if env := os.Getenv(EnvFlagmintEnv); env != "" {
+		if endpoints, ok := envEndpoints[env]; ok {
+			return endpoints[0], endpoints[1]
+		}
+	}
+
+	// 3. Default to production
+	return envEndpoints["prod"][0], envEndpoints["prod"][1]
 }
 
 // WithContext sets the default evaluation context for the client.

