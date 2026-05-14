@@ -38,7 +38,9 @@ func (b *Backoff) Next() time.Duration {
 		delay = float64(b.MaxDelay)
 	}
 	if b.Jitter > 0 {
-		// Apply symmetric jitter: delay × Jitter × uniform(-1, 1)
+		// Apply symmetric jitter: delay × Jitter × uniform(-1, 1).
+		// Go 1.20+ automatically seeds the global rand source, so no explicit
+		// seeding is required.
 		jitter := delay * b.Jitter * (2*rand.Float64() - 1)
 		delay += jitter
 	}

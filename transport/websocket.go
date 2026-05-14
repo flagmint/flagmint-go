@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	wsPath          = "/ws/sdk"
-	fetchFlagsTimeout = 10 * time.Second
+	wsPath             = "/ws/sdk"
+	defaultFetchTimeout = 10 * time.Second
 )
 
 // wsMessage is the wire format for WebSocket messages.
@@ -129,7 +129,7 @@ func (t *WebSocketTransport) FetchFlags(ctx context.Context, evalCtx map[string]
 	}
 
 	// Wait for the readLoop to deliver the response.
-	fetchCtx, cancel := context.WithTimeout(ctx, fetchFlagsTimeout)
+	fetchCtx, cancel := context.WithTimeout(ctx, defaultFetchTimeout)
 	defer cancel()
 
 	select {

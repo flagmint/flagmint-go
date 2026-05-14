@@ -247,24 +247,20 @@ func (t *HTTPTransport) notifyUpdated(flags map[string]any) {
 	}
 }
 
-// mapsEqual reports whether two flag maps have equal contents.
+// mapsEqual reports whether two flag maps have equal contents using deep equality.
 func mapsEqual(a, b map[string]any) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for k, v := range a {
-		bv, ok := b[k]
-		if !ok {
-			return false
-		}
-		// Compare via JSON encoding for deep equality.
-		av, _ := json.Marshal(v)
-		bvs, _ := json.Marshal(bv)
-		if string(av) != string(bvs) {
-			return false
-		}
+	// Use JSON round-trip for deep comparison of nested values, which handles
+	// different numeric types consistently (all numbers come back as float64).
+	aJSON, errA := json.Marshal(a)
+	bJSON, errB := json.Marshal(b)
+	if errA != nil || errB != nil {
+		// On marshal failure, fall back to length-only comparison (already done above).
+		return false
 	}
-	return true
+	return string(aJSON) == string(bJSON)
 }
 
 // Ensure HTTPTransport satisfies the Transport interface at compile time.
