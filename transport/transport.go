@@ -3,17 +3,27 @@ package transport
 
 import "context"
 
-// Transport is responsible for receiving flag updates from the Flagmint
-// backend and delivering them to the client.
+// Transport abstracts the communication layer between the SDK and Flagmint servers.
+// Implementations must be safe for concurrent use after Connect() returns.
 type Transport interface {
-	// Connect establishes the connection to the backend.
-	// It blocks until the connection is established or ctx is cancelled.
+	// Connect establishes the connection. Blocks until the transport is ready
+	// to send/receive, or ctx is cancelled.
 	Connect(ctx context.Context) error
 
-	// Close shuts down the transport and releases all associated resources.
-	Close() error
+	// FetchFlags sends the evaluation context to the server and returns the
+	// evaluated flag set. evalCtx is a map representation of the evaluation
+	// context. For WebSocket this sends a context message; for HTTP this makes
+	// a POST request.
+	FetchFlags(ctx context.Context, evalCtx map[string]any) (map[string]any, error)
 
-	// OnFlagsUpdated registers a callback that is invoked whenever a new set
-	// of flags is received from the backend. The callback must not block.
+	// OnFlagsUpdated registers a callback invoked when the server pushes flag
+	// updates (WebSocket broadcasts or poll results with changes).
+	// Must be called before Connect(). Only one callback is supported;
+	// subsequent calls replace the previous callback.
 	OnFlagsUpdated(fn func(flags map[string]any))
+
+	// Close shuts down the transport and releases resources.
+	// Blocks until all internal goroutines have exited.
+	// Safe to call multiple times.
+	Close() error
 }

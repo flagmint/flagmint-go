@@ -2,6 +2,7 @@ package flagmint
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -83,8 +84,8 @@ func NewClient(apiKey string, opts ...Option) (*FlagClient, error) {
 		c.transport = transport.NewWebSocketTransport(cfg.wsEndpoint, apiKey, cfg.logger)
 	case TransportLongPolling:
 		c.transport = transport.NewHTTPTransport(cfg.restEndpoint, apiKey, cfg.logger)
-	default: // TransportAuto — prefer WebSocket
-		c.transport = transport.NewWebSocketTransport(cfg.wsEndpoint, apiKey, cfg.logger)
+	default: // TransportAuto — prefer WebSocket, fall back to HTTP
+		c.transport = transport.NewAutoTransport(cfg.wsEndpoint, cfg.restEndpoint, apiKey, cfg.logger)
 	}
 
 	c.transport.OnFlagsUpdated(c.onFlagsReceived)
@@ -242,7 +243,53 @@ func (c *FlagClient) UpdateContext(ctx EvaluationContext) error {
 		// Remove stale entry for the previous key so the next fetch is clean.
 		c.cache.Delete(ctx.Key)
 	}
+	// Trigger a flag refresh with the new context in the background.
+	go c.fetchFlagsForContext(ctx)
 	return nil
+}
+
+// fetchFlagsForContext converts the EvaluationContext to a map and calls
+// FetchFlags on the transport, updating client flag state on success.
+// It waits for the transport to be ready before calling FetchFlags.
+func (c *FlagClient) fetchFlagsForContext(ctx EvaluationContext) {
+	// Wait until transport is connected (readyCh closed) or client is closed.
+	select {
+	case <-c.readyCh:
+	case <-c.internalCtx.Done():
+		return
+	}
+	if c.readyErr != nil {
+		return
+	}
+	evalMap, err := evalContextToMap(ctx)
+	if err != nil {
+		if c.cfg.onError != nil {
+			c.cfg.onError(fmt.Errorf("flagmint: marshal eval context: %w", err))
+		}
+		return
+	}
+	flags, err := c.transport.FetchFlags(c.internalCtx, evalMap)
+	if err != nil {
+		if c.internalCtx.Err() == nil && c.cfg.onError != nil {
+			c.cfg.onError(fmt.Errorf("flagmint: FetchFlags: %w", err))
+		}
+		return
+	}
+	c.updateFlags(NewFeatureFlags(flags))
+}
+
+// evalContextToMap converts an EvaluationContext struct into a map[string]any
+// via JSON round-trip so the transport layer has no dependency on this package.
+func evalContextToMap(ctx EvaluationContext) (map[string]any, error) {
+	b, err := json.Marshal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // SetContext updates the evaluation context. Deprecated: use UpdateContext.
