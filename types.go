@@ -101,6 +101,28 @@ func (f FeatureFlags) Float64(key string, fallback float64) float64 {
 	return v
 }
 
+// Get returns the raw value for a flag key and whether it was found.
+func (f FeatureFlags) Get(key string) (any, bool) {
+	if f.values == nil {
+		return nil, false
+	}
+	v, ok := f.values[key]
+	return v, ok
+}
+
+// Clone returns a shallow copy of the flag set.
+// The copy has its own map so the caller cannot mutate the original values.
+func (f FeatureFlags) Clone() FeatureFlags {
+	if f.values == nil {
+		return FeatureFlags{}
+	}
+	m := make(map[string]any, len(f.values))
+	for k, v := range f.values {
+		m[k] = v
+	}
+	return FeatureFlags{values: m}
+}
+
 // JSON unmarshals a complex flag configuration into target (must be a pointer).
 // Returns [ErrFlagNotFound] when the key is absent, or a marshalling error
 // when the stored value cannot be encoded/decoded into target.
