@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/flagmint/flagmint-go/cache"
 	"github.com/flagmint/flagmint-go/internal/syncutil"
 	"github.com/flagmint/flagmint-go/transport"
 )
@@ -20,7 +19,7 @@ type FlagClient struct {
 	flags     syncutil.RWValue[FeatureFlags]
 	evalCtx   syncutil.RWValue[*EvaluationContext]
 	transport transport.Transport
-	cache     cache.Adapter
+	cache     CacheAdapter
 	logger    *slog.Logger
 
 	// Lifecycle
@@ -74,7 +73,7 @@ func NewClient(apiKey string, opts ...Option) (*FlagClient, error) {
 		if cfg.cacheAdapter != nil {
 			c.cache = cfg.cacheAdapter
 		} else {
-			c.cache = cache.NewMemoryCache()
+			c.cache = newDefaultMemoryCache()
 		}
 	}
 
@@ -128,23 +127,30 @@ func (c *FlagClient) Ready(ctx context.Context) error {
 	}
 }
 
-// initialize performs the one-time setup: loads cached flags, connects the
-// transport, and closes readyCh when done. It is always called in its own
-// goroutine via initOnce.
+// initialize performs the one-time setup: loads cached context and flags,
+// connects the transport, and closes readyCh when done. It is always called
+// in its own goroutine via initOnce.
 func (c *FlagClient) initialize() {
 	c.logger.Info("flagmint: initialising client")
 
 	var hasCachedFlags bool
 
-	// Attempt to load flags from cache first (degraded-mode support).
 	if c.cache != nil {
-		if evalCtx := c.evalCtx.Load(); evalCtx != nil {
-			if cached, ok := c.cache.Get(evalCtx.Key); ok {
-				if flags, ok := cached.(FeatureFlags); ok {
-					c.updateFlags(flags)
-					hasCachedFlags = true
-				}
+		// Step A: Restore persisted context if none was provided at construction.
+		if c.evalCtx.Load() == nil {
+			if cachedCtx, err := c.cache.LoadContext(c.cfg.apiKey); err == nil && cachedCtx != nil {
+				c.evalCtx.Store(cachedCtx)
+			} else if err != nil {
+				c.logger.Warn("flagmint: failed to load cached context", "error", err)
 			}
+		}
+
+		// Step B: Serve cached flags immediately (degraded-mode support).
+		if cachedFlags, err := c.cache.LoadFlags(c.cfg.apiKey); err == nil && cachedFlags != nil {
+			c.updateFlags(*cachedFlags)
+			hasCachedFlags = true
+		} else if err != nil {
+			c.logger.Warn("flagmint: failed to load cached flags", "error", err)
 		}
 	}
 
@@ -240,8 +246,9 @@ func (c *FlagClient) JSONFlag(key string, fallback map[string]any) map[string]an
 func (c *FlagClient) UpdateContext(ctx EvaluationContext) error {
 	c.evalCtx.Store(&ctx)
 	if c.cache != nil {
-		// Remove stale entry for the previous key so the next fetch is clean.
-		c.cache.Delete(ctx.Key)
+		if err := c.cache.SaveContext(c.cfg.apiKey, &ctx); err != nil {
+			c.logger.Warn("flagmint: failed to save context to cache", "error", err)
+		}
 	}
 	// Trigger a flag refresh with the new context in the background.
 	go c.fetchFlagsForContext(ctx)
@@ -340,15 +347,15 @@ func (c *FlagClient) onFlagsReceived(raw map[string]any) {
 	c.updateFlags(NewFeatureFlags(raw))
 }
 
-// updateFlags stores the new flag set, persists it to cache, and notifies
-// all registered subscribers. It is the single write path for flag state.
+// updateFlags stores the new flag set, persists it to cache (best-effort), and
+// notifies all registered subscribers. It is the single write path for flag state.
 func (c *FlagClient) updateFlags(flags FeatureFlags) {
 	c.flags.Store(flags)
 	c.logger.Info("flagmint: flags updated", "count", flags.Len())
 
 	if c.cache != nil {
-		if ctx := c.evalCtx.Load(); ctx != nil {
-			c.cache.Set(ctx.Key, flags)
+		if err := c.cache.SaveFlags(c.cfg.apiKey, flags); err != nil {
+			c.logger.Warn("flagmint: failed to save flags to cache", "error", err)
 		}
 	}
 

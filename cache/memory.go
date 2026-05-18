@@ -1,55 +1,77 @@
 package cache
 
-import "sync"
+import (
+	"sync"
+	"time"
 
-// entry holds a cached value.
-type entry struct {
-	value any
+	flagmint "github.com/flagmint/flagmint-go"
+)
+
+// flagEntry holds a FeatureFlags value and its storage timestamp for TTL checks.
+type flagEntry struct {
+	flags    flagmint.FeatureFlags
+	storedAt time.Time
 }
 
-// MemoryCache is a simple in-memory cache backed by a sync.Map.
-// It has no capacity limit or TTL; it is suitable for use in environments
-// where the flag set is small and bounded.
-// For production use cases consider supplying a proper LRU adapter via
-// [WithCacheAdapter].
+// MemoryCache is a simple in-memory CacheAdapter with TTL.
+// Safe for concurrent use.
 type MemoryCache struct {
-	mu   sync.RWMutex
-	data map[string]entry
+	mu       sync.RWMutex
+	ttl      time.Duration
+	flags    map[string]flagEntry
+	contexts map[string]*flagmint.EvaluationContext
 }
 
-// NewMemoryCache returns an initialised MemoryCache.
-func NewMemoryCache() *MemoryCache {
-	return &MemoryCache{data: make(map[string]entry)}
+// NewMemoryCache returns a new MemoryCache with the given TTL.
+// Use DefaultTTL for the standard 24-hour TTL.
+// A TTL of zero disables flag expiry.
+func NewMemoryCache(ttl time.Duration) *MemoryCache {
+	return &MemoryCache{
+		ttl:      ttl,
+		flags:    make(map[string]flagEntry),
+		contexts: make(map[string]*flagmint.EvaluationContext),
+	}
 }
 
-// Get returns the cached value for contextKey.
-func (m *MemoryCache) Get(contextKey string) (any, bool) {
+// LoadFlags returns the cached flags for apiKey, or nil if the entry is absent
+// or has expired.
+func (m *MemoryCache) LoadFlags(apiKey string) (*flagmint.FeatureFlags, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	e, ok := m.data[contextKey]
+	entry, ok := m.flags[apiKey]
 	if !ok {
-		return nil, false
+		return nil, nil
 	}
-	return e.value, true
+	if m.ttl > 0 && time.Since(entry.storedAt) > m.ttl {
+		return nil, nil
+	}
+	flags := entry.flags
+	return &flags, nil
 }
 
-// Set stores value under contextKey.
-func (m *MemoryCache) Set(contextKey string, value any) {
+// SaveFlags stores flags for apiKey, resetting the TTL timer.
+func (m *MemoryCache) SaveFlags(apiKey string, flags flagmint.FeatureFlags) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.data[contextKey] = entry{value: value}
+	m.flags[apiKey] = flagEntry{flags: flags, storedAt: time.Now()}
+	return nil
 }
 
-// Delete removes the entry for contextKey.
-func (m *MemoryCache) Delete(contextKey string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.data, contextKey)
+// LoadContext returns the cached evaluation context for apiKey, or nil if none exists.
+func (m *MemoryCache) LoadContext(apiKey string) (*flagmint.EvaluationContext, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ctx, ok := m.contexts[apiKey]
+	if !ok {
+		return nil, nil
+	}
+	return ctx, nil
 }
 
-// Flush clears all cached entries.
-func (m *MemoryCache) Flush() {
+// SaveContext persists the evaluation context for apiKey.
+func (m *MemoryCache) SaveContext(apiKey string, ctx *flagmint.EvaluationContext) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.data = make(map[string]entry)
+	m.contexts[apiKey] = ctx
+	return nil
 }

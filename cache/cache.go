@@ -1,18 +1,15 @@
 package cache
 
-// Adapter is the interface for pluggable flag-value caches.
-// Implementations must be safe for concurrent use.
-type Adapter interface {
-	// Get returns the cached FeatureFlags for the given context key.
-	// ok is false when the key is not present or the entry has expired.
-	Get(contextKey string) (value any, ok bool)
+import (
+	"time"
 
-	// Set stores value for contextKey, replacing any existing entry.
-	Set(contextKey string, value any)
+	flagmint "github.com/flagmint/flagmint-go"
+)
 
-	// Delete removes the entry for contextKey, if present.
-	Delete(contextKey string)
+// DefaultTTL is the default time-to-live for cached flags.
+// Matches the JS SDK's DEFAULT_CACHE_TTL (24 * 60 * 60 * 1000 ms).
+const DefaultTTL = 24 * time.Hour
 
-	// Flush removes all cached entries.
-	Flush()
-}
+// Compile-time checks that MemoryCache and NopCache implement flagmint.CacheAdapter.
+var _ flagmint.CacheAdapter = (*MemoryCache)(nil)
+var _ flagmint.CacheAdapter = NopCache{}

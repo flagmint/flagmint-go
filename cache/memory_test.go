@@ -3,167 +3,240 @@ package cache_test
 import (
 	"sync"
 	"testing"
+	"time"
 
+	flagmint "github.com/flagmint/flagmint-go"
 	"github.com/flagmint/flagmint-go/cache"
 )
 
-func TestMemoryCache(t *testing.T) {
-	c := cache.NewMemoryCache()
+// sampleFlags builds a FeatureFlags value for use in tests.
+func sampleFlags(entries map[string]any) flagmint.FeatureFlags {
+	return flagmint.NewFeatureFlags(entries)
+}
 
-	// Miss before insertion.
-	if _, ok := c.Get("k1"); ok {
-		t.Fatal("expected cache miss")
+// sampleContext returns an EvaluationContext for use in tests.
+func sampleContext(key string) *flagmint.EvaluationContext {
+	return &flagmint.EvaluationContext{Kind: "user", Key: key}
+}
+
+// --- MemoryCache tests ---
+
+// TestMemoryCache_RoundTrip verifies that SaveFlags → LoadFlags returns the same data.
+func TestMemoryCache_RoundTrip(t *testing.T) {
+	c := cache.NewMemoryCache(cache.DefaultTTL)
+	flags := sampleFlags(map[string]any{"dark-mode": true, "retries": float64(3)})
+
+	if err := c.SaveFlags("api-key", flags); err != nil {
+		t.Fatalf("SaveFlags: unexpected error: %v", err)
 	}
 
-	// Hit after insertion.
-	c.Set("k1", "value1")
-	v, ok := c.Get("k1")
-	if !ok {
-		t.Fatal("expected cache hit")
+	loaded, err := c.LoadFlags("api-key")
+	if err != nil {
+		t.Fatalf("LoadFlags: unexpected error: %v", err)
 	}
-	if v != "value1" {
-		t.Errorf("got %v, want value1", v)
+	if loaded == nil {
+		t.Fatal("LoadFlags: expected non-nil flags, got nil")
 	}
-
-	// Delete removes the entry.
-	c.Delete("k1")
-	if _, ok := c.Get("k1"); ok {
-		t.Fatal("expected cache miss after delete")
+	if !loaded.Bool("dark-mode", false) {
+		t.Error("LoadFlags: dark-mode flag should be true")
 	}
-
-	// Flush removes all entries.
-	c.Set("a", 1)
-	c.Set("b", 2)
-	c.Flush()
-	if _, ok := c.Get("a"); ok {
-		t.Fatal("expected cache miss after flush")
+	if loaded.Float64("retries", 0) != 3 {
+		t.Errorf("LoadFlags: retries = %v, want 3", loaded.Float64("retries", 0))
 	}
 }
 
-// TestMemoryCache_MultipleKeys verifies storing and retrieving multiple keys.
-func TestMemoryCache_MultipleKeys(t *testing.T) {
-	c := cache.NewMemoryCache()
+// TestMemoryCache_MissingKey verifies that LoadFlags returns nil for an unknown key.
+func TestMemoryCache_MissingKey(t *testing.T) {
+	c := cache.NewMemoryCache(cache.DefaultTTL)
 
-	c.Set("key1", "value1")
-	c.Set("key2", "value2")
-	c.Set("key3", "value3")
-
-	v1, ok1 := c.Get("key1")
-	v2, ok2 := c.Get("key2")
-	v3, ok3 := c.Get("key3")
-
-	if !ok1 || v1 != "value1" {
-		t.Error("key1 retrieval failed")
+	loaded, err := c.LoadFlags("unknown-key")
+	if err != nil {
+		t.Fatalf("LoadFlags: unexpected error: %v", err)
 	}
-	if !ok2 || v2 != "value2" {
-		t.Error("key2 retrieval failed")
-	}
-	if !ok3 || v3 != "value3" {
-		t.Error("key3 retrieval failed")
+	if loaded != nil {
+		t.Errorf("LoadFlags: expected nil for unknown key, got %v", loaded)
 	}
 }
 
-// TestMemoryCache_Overwrite verifies that Set overwrites existing values.
-func TestMemoryCache_Overwrite(t *testing.T) {
-	c := cache.NewMemoryCache()
+// TestMemoryCache_TTLExpiry verifies that entries return nil after TTL elapses.
+func TestMemoryCache_TTLExpiry(t *testing.T) {
+	shortTTL := 50 * time.Millisecond
+	c := cache.NewMemoryCache(shortTTL)
+	flags := sampleFlags(map[string]any{"feature": true})
 
-	c.Set("key", "value1")
-	if v, _ := c.Get("key"); v != "value1" {
-		t.Error("initial value incorrect")
+	if err := c.SaveFlags("api-key", flags); err != nil {
+		t.Fatalf("SaveFlags: %v", err)
 	}
 
-	c.Set("key", "value2")
-	if v, _ := c.Get("key"); v != "value2" {
-		t.Error("overwritten value incorrect")
+	// Entry should be valid before TTL elapses.
+	if loaded, err := c.LoadFlags("api-key"); err != nil || loaded == nil {
+		t.Fatalf("LoadFlags before expiry: err=%v, loaded=%v", err, loaded)
 	}
-}
 
-// TestMemoryCache_DeleteNonExistent verifies deleting a non-existent key is safe.
-func TestMemoryCache_DeleteNonExistent(t *testing.T) {
-	c := cache.NewMemoryCache()
+	// Wait for the TTL to elapse.
+	time.Sleep(shortTTL + 10*time.Millisecond)
 
-	// Should not panic
-	c.Delete("non-existent")
-
-	// Verify nothing was added
-	if _, ok := c.Get("non-existent"); ok {
-		t.Error("key should still not exist")
+	// Entry should now be expired (nil, nil).
+	expired, err := c.LoadFlags("api-key")
+	if err != nil {
+		t.Fatalf("LoadFlags after expiry: unexpected error: %v", err)
 	}
-}
-
-// TestMemoryCache_FlushEmpty verifies flushing an empty cache is safe.
-func TestMemoryCache_FlushEmpty(t *testing.T) {
-	c := cache.NewMemoryCache()
-
-	// Should not panic
-	c.Flush()
-
-	// Verify cache is still usable
-	c.Set("key", "value")
-	if v, ok := c.Get("key"); !ok || v != "value" {
-		t.Error("cache not usable after flush empty")
+	if expired != nil {
+		t.Error("LoadFlags after expiry: expected nil, got non-nil flags")
 	}
 }
 
-// TestMemoryCache_ConcurrentAccess verifies thread safety with concurrent operations.
+// TestMemoryCache_TTLRefresh verifies that a second SaveFlags resets the TTL timer.
+func TestMemoryCache_TTLRefresh(t *testing.T) {
+	halfTTL := 40 * time.Millisecond
+	fullTTL := halfTTL * 2
+	c := cache.NewMemoryCache(fullTTL)
+	flags := sampleFlags(map[string]any{"feature": true})
+
+	// First save.
+	if err := c.SaveFlags("api-key", flags); err != nil {
+		t.Fatalf("first SaveFlags: %v", err)
+	}
+
+	// Wait less than the full TTL, then save again to reset the timer.
+	time.Sleep(halfTTL)
+	if err := c.SaveFlags("api-key", flags); err != nil {
+		t.Fatalf("second SaveFlags: %v", err)
+	}
+
+	// Wait less than a full TTL from the second save — entry should still be valid.
+	time.Sleep(halfTTL)
+	refreshed, err := c.LoadFlags("api-key")
+	if err != nil {
+		t.Fatalf("LoadFlags after refresh: %v", err)
+	}
+	if refreshed == nil {
+		t.Error("LoadFlags after refresh: expected non-nil flags, got nil")
+	}
+}
+
+// TestMemoryCache_ContextRoundTrip verifies that SaveContext → LoadContext returns
+// the same data.
+func TestMemoryCache_ContextRoundTrip(t *testing.T) {
+	c := cache.NewMemoryCache(cache.DefaultTTL)
+	ctx := sampleContext("user-123")
+
+	if err := c.SaveContext("api-key", ctx); err != nil {
+		t.Fatalf("SaveContext: %v", err)
+	}
+
+	loaded, err := c.LoadContext("api-key")
+	if err != nil {
+		t.Fatalf("LoadContext: %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("LoadContext: expected non-nil context, got nil")
+	}
+	if loaded.Key != "user-123" {
+		t.Errorf("LoadContext: key = %q, want user-123", loaded.Key)
+	}
+}
+
+// TestMemoryCache_ContextMissingKey verifies that LoadContext returns nil for an
+// unknown key.
+func TestMemoryCache_ContextMissingKey(t *testing.T) {
+	c := cache.NewMemoryCache(cache.DefaultTTL)
+
+	loaded, err := c.LoadContext("unknown-key")
+	if err != nil {
+		t.Fatalf("LoadContext: %v", err)
+	}
+	if loaded != nil {
+		t.Errorf("LoadContext: expected nil for unknown key, got %v", loaded)
+	}
+}
+
+// TestMemoryCache_SaveFlagsOverwrites verifies that a second SaveFlags replaces
+// the previous entry.
+func TestMemoryCache_SaveFlagsOverwrites(t *testing.T) {
+	c := cache.NewMemoryCache(cache.DefaultTTL)
+	firstFlags := sampleFlags(map[string]any{"version": float64(1)})
+	secondFlags := sampleFlags(map[string]any{"version": float64(2)})
+
+	_ = c.SaveFlags("api-key", firstFlags)
+	_ = c.SaveFlags("api-key", secondFlags)
+
+	loaded, err := c.LoadFlags("api-key")
+	if err != nil {
+		t.Fatalf("LoadFlags: %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("LoadFlags: expected non-nil flags")
+	}
+	if loaded.Float64("version", 0) != 2 {
+		t.Errorf("LoadFlags: version = %v, want 2", loaded.Float64("version", 0))
+	}
+}
+
+// TestMemoryCache_ConcurrentAccess verifies goroutine safety under concurrent
+// reads and writes.
 func TestMemoryCache_ConcurrentAccess(t *testing.T) {
-	c := cache.NewMemoryCache()
+	c := cache.NewMemoryCache(cache.DefaultTTL)
+	flags := sampleFlags(map[string]any{"feature": true})
+	ctx := sampleContext("user-concurrent")
 
 	const goroutines = 50
-	const iterations = 100
-
 	var wg sync.WaitGroup
-	wg.Add(goroutines)
+	wg.Add(goroutines * 2)
 
-	for g := 0; g < goroutines; g++ {
-		go func(id int) {
+	// Writers
+	for workerID := 0; workerID < goroutines; workerID++ {
+		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
-				key := "key"
-				val := "value"
-				c.Set(key, val)
-				if v, ok := c.Get(key); !ok || v != val {
-					t.Errorf("concurrent access failed for goroutine %d", id)
-				}
-			}
-		}(g)
+			_ = c.SaveFlags("api-key", flags)
+			_ = c.SaveContext("api-key", ctx)
+		}()
+	}
+
+	// Readers
+	for workerID := 0; workerID < goroutines; workerID++ {
+		go func() {
+			defer wg.Done()
+			_, _ = c.LoadFlags("api-key")
+			_, _ = c.LoadContext("api-key")
+		}()
 	}
 
 	wg.Wait()
 }
 
-// TestMemoryCache_Various types verifies storing various value types.
-func TestMemoryCache_VariousTypes(t *testing.T) {
-	c := cache.NewMemoryCache()
+// --- NopCache tests ---
 
-	// String
-	c.Set("string", "hello")
-	if v, _ := c.Get("string"); v != "hello" {
-		t.Error("string value mismatch")
+// TestNopCache_AllMethodsReturnNil verifies that NopCache discards writes and
+// returns nil on all reads without error.
+func TestNopCache_AllMethodsReturnNil(t *testing.T) {
+	var nop cache.NopCache
+	flags := sampleFlags(map[string]any{"feature": true})
+	ctx := sampleContext("user-nop")
+
+	// SaveFlags and SaveContext should succeed silently.
+	if err := nop.SaveFlags("api-key", flags); err != nil {
+		t.Errorf("NopCache.SaveFlags: unexpected error: %v", err)
+	}
+	if err := nop.SaveContext("api-key", ctx); err != nil {
+		t.Errorf("NopCache.SaveContext: unexpected error: %v", err)
 	}
 
-	// Number
-	c.Set("number", float64(42))
-	if v, _ := c.Get("number"); v != float64(42) {
-		t.Error("number value mismatch")
+	// LoadFlags should always return nil, nil.
+	loadedFlags, err := nop.LoadFlags("api-key")
+	if err != nil {
+		t.Errorf("NopCache.LoadFlags: unexpected error: %v", err)
+	}
+	if loadedFlags != nil {
+		t.Errorf("NopCache.LoadFlags: expected nil, got %v", loadedFlags)
 	}
 
-	// Boolean
-	c.Set("bool", true)
-	if v, _ := c.Get("bool"); v != true {
-		t.Error("bool value mismatch")
+	// LoadContext should always return nil, nil.
+	loadedCtx, err := nop.LoadContext("api-key")
+	if err != nil {
+		t.Errorf("NopCache.LoadContext: unexpected error: %v", err)
 	}
-
-	// Map
-	m := map[string]any{"key": "value"}
-	c.Set("map", m)
-	if v, _ := c.Get("map"); v == nil {
-		t.Error("map value should not be nil")
-	}
-
-	// Nil (edge case)
-	c.Set("nil", nil)
-	if v, ok := c.Get("nil"); !ok || v != nil {
-		t.Error("nil value mismatch")
+	if loadedCtx != nil {
+		t.Errorf("NopCache.LoadContext: expected nil, got %v", loadedCtx)
 	}
 }

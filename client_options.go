@@ -3,8 +3,6 @@ package flagmint
 import (
 	"log/slog"
 	"os"
-
-	"github.com/flagmint/flagmint-go/cache"
 )
 
 // TransportMode controls the transport mechanism used by the client.
@@ -41,7 +39,7 @@ type clientConfig struct {
 	context       *EvaluationContext
 	transportMode TransportMode
 	enableCache   bool
-	cacheAdapter  cache.Adapter
+	cacheAdapter  CacheAdapter
 	onError       func(error)
 	restEndpoint  string
 	wsEndpoint    string
@@ -104,8 +102,9 @@ func WithCache(enabled bool) Option {
 	}
 }
 
-// WithCacheAdapter sets a custom cache adapter.
-func WithCacheAdapter(adapter cache.Adapter) Option {
+// WithCacheAdapter sets a custom cache adapter. Implementations must be
+// safe for concurrent use. Enables caching automatically.
+func WithCacheAdapter(adapter CacheAdapter) Option {
 	return func(c *clientConfig) {
 		c.cacheAdapter = adapter
 		c.enableCache = true
