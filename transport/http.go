@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 )
 
 const (
-	evaluatePath    = "/evaluator/evaluate"
+	evaluatePath        = "/evaluator/evaluate"
 	defaultPollInterval = 20 * time.Minute
 )
 
@@ -213,6 +214,10 @@ func (t *HTTPTransport) postEvaluate(ctx context.Context, evalCtx map[string]any
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", t.apiKey)
+	// Add rate limit bypass token if available
+	if token := os.Getenv("RATE_LIMIT_BYPASS_TOKEN"); token != "" {
+		req.Header.Set("x-bypass-rate-limit", token)
+	}
 
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
