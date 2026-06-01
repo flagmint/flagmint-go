@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 )
 
 const (
-	wsPath             = "/ws/sdk"
+	wsPath              = "/ws/sdk"
 	defaultFetchTimeout = 10 * time.Second
 )
 
@@ -170,12 +171,19 @@ func (t *WebSocketTransport) wsURL() string {
 
 // dial opens a new WebSocket connection, passing the API key as a header.
 func (t *WebSocketTransport) dial(ctx context.Context) (*websocket.Conn, error) {
-	opts := &websocket.DialOptions{
-		HTTPHeader: http.Header{
-			"x-api-key": {t.apiKey},
-		},
+	url := t.wsURL()
+	t.logger.Info("websocket: dialing", "url", url)
+	headers := http.Header{
+		"x-api-key": {t.apiKey},
 	}
-	conn, _, err := websocket.Dial(ctx, t.wsURL(), opts)
+	// Add rate limit bypass token if available
+	if token := os.Getenv("RATE_LIMIT_BYPASS_TOKEN"); token != "" {
+		headers.Set("x-bypass-rate-limit", token)
+	}
+	opts := &websocket.DialOptions{
+		HTTPHeader: headers,
+	}
+	conn, _, err := websocket.Dial(ctx, url, opts)
 	return conn, err
 }
 

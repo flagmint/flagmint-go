@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // AutoTransport attempts to connect via WebSocket first; on failure it falls
@@ -51,12 +52,15 @@ func (t *AutoTransport) Connect(ctx context.Context) error {
 	cb := t.onUpdated
 	t.cbMu.Unlock()
 
-	// Try WebSocket.
+	// Try WebSocket with a dedicated timeout for the connection attempt.
 	ws := NewWebSocketTransport(t.wsEndpoint, t.apiKey, t.logger)
 	if cb != nil {
 		ws.OnFlagsUpdated(cb)
 	}
-	if err := ws.Connect(ctx); err == nil {
+	// Use a separate context with a reasonable timeout for WebSocket handshake.
+	ws_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ws.Connect(ws_ctx); err == nil {
 		t.active = ws
 		t.logger.Info("auto transport: using WebSocket")
 		return nil

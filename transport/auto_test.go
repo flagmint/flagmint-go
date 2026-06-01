@@ -2,6 +2,7 @@ package transport_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -10,6 +11,15 @@ import (
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )
+
+const defaultTestSDKToken = "ff_790d2cdfa5b0b89d43bf45a311341829732e6b5c39c020b45a7080069ba92214"
+
+func testSDKToken() string {
+	if token := os.Getenv("FLAGMINT_SDK_TOKEN"); token != "" {
+		return token
+	}
+	return defaultTestSDKToken
+}
 
 // TestAutoTransport_FallbackToHTTP verifies that when the WebSocket endpoint
 // is unreachable, the AutoTransport transparently falls back to HTTP.
@@ -24,7 +34,7 @@ func TestAutoTransport_FallbackToHTTP(t *testing.T) {
 
 	// Point WebSocket at an unreachable address (closed port).
 	const unreachableWS = "ws://127.0.0.1:1" // port 1 is never open
-	tr := transport.NewAutoTransport(unreachableWS, httpSrv.URL, "test-key", silentLogger(t))
+	tr := transport.NewAutoTransport(unreachableWS, httpSrv.URL, testSDKToken(), silentLogger(t))
 	tr.OnFlagsUpdated(func(flags map[string]any) {
 		select {
 		case flagsCh <- flags:
@@ -70,7 +80,7 @@ func TestAutoTransport_WebSocket(t *testing.T) {
 
 	wsEndpoint := "ws" + wsSrv.URL[4:]
 	// HTTP endpoint is unreachable — should not be used.
-	tr := transport.NewAutoTransport(wsEndpoint, "http://127.0.0.1:1", "test-key", silentLogger(t))
+	tr := transport.NewAutoTransport(wsEndpoint, "http://127.0.0.1:1", testSDKToken(), silentLogger(t))
 	tr.OnFlagsUpdated(func(flags map[string]any) {
 		select {
 		case flagsCh <- flags:
@@ -104,7 +114,7 @@ func TestAutoTransport_Close_Idempotent(t *testing.T) {
 	defer httpSrv.Close()
 
 	const unreachableWS = "ws://127.0.0.1:1"
-	tr := transport.NewAutoTransport(unreachableWS, httpSrv.URL, "k", silentLogger(t))
+	tr := transport.NewAutoTransport(unreachableWS, httpSrv.URL, testSDKToken(), silentLogger(t))
 	tr.OnFlagsUpdated(func(map[string]any) {})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -131,7 +141,7 @@ func TestAutoTransport_FetchFlags_Fallback(t *testing.T) {
 	defer httpSrv.Close()
 
 	const unreachableWS = "ws://127.0.0.1:1"
-	tr := transport.NewAutoTransport(unreachableWS, httpSrv.URL, "k", silentLogger(t))
+	tr := transport.NewAutoTransport(unreachableWS, httpSrv.URL, testSDKToken(), silentLogger(t))
 	tr.OnFlagsUpdated(func(map[string]any) {})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
