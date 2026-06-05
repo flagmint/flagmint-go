@@ -1,6 +1,6 @@
 # Flagmint Go SDK
 
-The official Go SDK for [Flagmint](https://flagmint.com) feature flags.
+The official Go SDK for [Flagmint](https://docs.flagmint.com/sdks/go) feature flags.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/flagmint/flagmint-go.svg)](https://pkg.go.dev/github.com/flagmint/flagmint-go)
 
