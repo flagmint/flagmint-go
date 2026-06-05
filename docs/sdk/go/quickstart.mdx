@@ -1,0 +1,100 @@
+---
+title: "Go SDK — Quickstart"
+description: "Install the Flagmint Go SDK and evaluate your first feature flag in under 2 minutes."
+---
+
+## Prerequisites
+
+- Go 1.21 or later
+- A Flagmint account and SDK API key (starts with `ff_`)
+
+> **Management API coming soon.** Programmatic flag creation via API is not yet available. Create and manage flags in the [Flagmint dashboard](https://flagmint.com/flags).
+
+## Installation
+
+```bash
+go get github.com/flagmint/flagmint-go
+```
+
+## Your First Flag
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    flagmint "github.com/flagmint/flagmint-go"
+)
+
+func main() {
+    client, err := flagmint.NewClient("fm_sdk_your_api_key",
+        flagmint.WithContext(flagmint.EvaluationContext{
+            Kind: "user",
+            Key:  "user-123",
+            Attributes: map[string]any{
+                "country": "DE",
+                "plan":    "pro",
+            },
+        }),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+
+    // Wait until flags are available (at most 5 seconds).
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+
+    if err := client.Ready(ctx); err != nil {
+        log.Fatal("failed to initialise:", err)
+    }
+
+    if client.BoolFlag("dark-mode", false) {
+        fmt.Println("Dark mode is enabled!")
+    }
+}
+```
+
+### What's happening
+
+| Step | Description |
+|------|-------------|
+| `NewClient` | Creates the client and starts connecting asynchronously |
+| `WithContext` | Sets the evaluation context (who is requesting the flag) |
+| `Ready` | Blocks until flags are fetched from the server or the timeout expires |
+| `BoolFlag` | Returns the flag value, or `false` (the fallback) if not set |
+
+## Subscribing to Flag Changes
+
+Register a callback to react whenever flags are updated:
+
+```go
+unsub := client.Subscribe(func(flags flagmint.FeatureFlags) {
+    fmt.Println("Flags updated:", flags.Len(), "flags")
+})
+defer unsub() // remove the subscription when done
+```
+
+The callback fires immediately with the current flag state, then again on every update.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" href="/sdk/go/configuration">
+    All `With*` options, endpoint overrides, and logger setup
+  </Card>
+  <Card title="Local Evaluation" href="/sdk/go/local-evaluation">
+    Evaluate flags in-process — no network round-trip
+  </Card>
+  <Card title="Transport" href="/sdk/go/transport">
+    WebSocket vs HTTP, reconnection, and fallback behaviour
+  </Card>
+  <Card title="Caching" href="/sdk/go/caching">
+    Built-in cache, TTL, and custom adapters
+  </Card>
+</CardGroup>

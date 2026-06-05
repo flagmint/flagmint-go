@@ -1,0 +1,227 @@
+---
+title: "Go SDK — Configuration"
+description: "All configuration options for the Flagmint Go SDK."
+---
+
+## Overview
+
+`flagmint.NewClient` accepts a variadic list of `Option` values produced by
+the `With*` helper functions. Options are applied in order; later options
+override earlier ones.
+
+```go
+client, err := flagmint.NewClient("fm_sdk_your_api_key",
+    flagmint.WithContext(...),
+    flagmint.WithTransportMode(flagmint.TransportWebSocket),
+    flagmint.WithCache(true),
+    flagmint.WithLogger(myLogger),
+)
+```
+
+## Options Reference
+
+### `WithContext(ctx EvaluationContext)`
+
+Sets the default evaluation context sent with every flag evaluation request.
+
+```go
+flagmint.WithContext(flagmint.EvaluationContext{
+    Kind: "user",
+    Key:  "user-123",
+    Attributes: map[string]any{
+        "country": "DE",
+        "plan":    "pro",
+    },
+})
+```
+
+Update the context at runtime with `client.UpdateContext(ctx)`.
+
+---
+
+### `WithTransportMode(mode TransportMode)`
+
+Controls how the SDK communicates with the Flagmint backend.
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `TransportAuto` | `"auto"` | WebSocket preferred, falls back to HTTP (default) |
+| `TransportWebSocket` | `"websocket"` | Force WebSocket |
+| `TransportLongPolling` | `"long-polling"` | Force HTTP long-polling |
+
+```go
+flagmint.WithTransportMode(flagmint.TransportWebSocket)
+```
+
+See [Transport](/sdk/go/transport) for a detailed comparison.
+
+---
+
+### `WithLocalEvaluation()`
+
+Enables local flag evaluation. Flags are evaluated in-process using downloaded
+rule configurations instead of being evaluated server-side.
+
+```go
+flagmint.WithLocalEvaluation()
+```
+
+See [Local Evaluation](/sdk/go/local-evaluation) for a full guide.
+
+---
+
+### `WithCache(enabled bool)`
+
+Enables (or disables) the built-in in-memory flag cache. When enabled, the
+SDK serves cached flags immediately on startup while the transport reconnects
+(degraded-mode support).
+
+```go
+flagmint.WithCache(true) // 24-hour TTL by default
+```
+
+---
+
+### `WithCacheAdapter(adapter CacheAdapter)`
+
+Replaces the built-in cache with a custom implementation. Automatically
+enables caching.
+
+```go
+flagmint.WithCacheAdapter(myRedisAdapter)
+```
+
+See [Caching](/sdk/go/caching) for the `CacheAdapter` interface and examples.
+
+---
+
+### `WithOnError(fn func(error))`
+
+Registers a callback invoked for non-fatal errors such as failed flag
+refreshes or cache write failures.
+
+```go
+flagmint.WithOnError(func(err error) {
+    log.Printf("flagmint: %v", err)
+})
+```
+
+---
+
+### `WithEndpoints(rest, ws string)`
+
+Overrides the default production API endpoints. Useful for staging, local
+development, or private deployments.
+
+```go
+flagmint.WithEndpoints(
+    "https://staging-api.flagmint.com",
+    "wss://staging-api.flagmint.com",
+)
+```
+
+You can also set endpoints via environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `FLAGMINT_REST_ENDPOINT` | Override the REST/HTTP endpoint |
+| `FLAGMINT_WS_ENDPOINT` | Override the WebSocket endpoint |
+| `FLAGMINT_ENV` | Short alias: `local`, `staging`, or `prod` |
+
+---
+
+### `WithDeferInit()`
+
+Prevents the client from connecting immediately. Call `client.Initialize(ctx)`
+or `client.Ready(ctx)` when ready to connect.
+
+```go
+client, _ := flagmint.NewClient(apiKey, flagmint.WithDeferInit())
+// ... later:
+if err := client.Ready(ctx); err != nil {
+    log.Fatal(err)
+}
+```
+
+---
+
+### `WithLogger(l *slog.Logger)`
+
+Supplies a custom structured logger (Go standard library `log/slog`). By
+default, the SDK uses `slog.Default()`.
+
+```go
+logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+flagmint.WithLogger(logger)
+```
+
+## Evaluation Context Structure
+
+The `EvaluationContext` tells Flagmint *who* is requesting flag evaluations and
+is used for targeting rules and percentage rollouts.
+
+```go
+// Single user context
+flagmint.EvaluationContext{
+    Kind: "user",
+    Key:  "user-123",
+    Attributes: map[string]any{
+        "country": "DE",
+        "plan":    "pro",
+        "email":   "alice@example.com",
+    },
+}
+
+// Organization context
+flagmint.EvaluationContext{
+    Kind: "organization",
+    Key:  "org-456",
+    Attributes: map[string]any{
+        "plan": "enterprise",
+    },
+}
+
+// Multi-context (user + organization evaluated together)
+flagmint.EvaluationContext{
+    Kind: "multi",
+    User: &flagmint.ContextEntity{
+        Key: "user-123",
+        Attributes: map[string]any{"plan": "pro"},
+    },
+    Organization: &flagmint.ContextEntity{
+        Key: "org-456",
+        Attributes: map[string]any{"plan": "enterprise"},
+    },
+}
+```
+
+## Flag Value Types
+
+The SDK provides typed getter methods that return a fallback when the flag is
+missing or has a different type:
+
+```go
+// Boolean
+enabled := client.BoolFlag("feature-x", false)
+
+// String
+theme := client.StringFlag("ui-theme", "light")
+
+// Number (float64)
+limit := client.NumberFlag("rate-limit", 100.0)
+
+// JSON object
+var config map[string]any
+if err := client.JSON("experiment-config", &config); err == nil {
+    // use config
+}
+```
+
+## Thread Safety
+
+`FlagClient` is safe for concurrent use by multiple goroutines. All public
+methods (`BoolFlag`, `StringFlag`, `GetFlags`, `UpdateContext`, `Subscribe`,
+`Close`, etc.) may be called from any goroutine without additional
+synchronisation.
+
+> **Note:** This SDK is pre-stable (`v0.1.0`). Breaking changes may occur before `v1.0.0`.

@@ -26,7 +26,7 @@ const (
 
 // Environment-specific endpoint defaults
 var envEndpoints = map[string][2]string{
-	"local":   {"http://localhost:3000", "ws://localhost:3000"},
+	"local":   {"http://localhost:3000/evaluator/evaluate", "ws://localhost:3000"},
 	"staging": {"https://staging-api.flagmint.com", "wss://staging-api.flagmint.com"},
 	"prod":    {"https://api.flagmint.com", "wss://api.flagmint.com"},
 }
@@ -79,7 +79,7 @@ func getEndpoints() (rest, ws string) {
 	}
 
 	// 3. Default to production
-	return envEndpoints["prod"][0], envEndpoints["prod"][1]
+	return envEndpoints["local"][0], envEndpoints["local"][1]
 }
 
 // WithContext sets the default evaluation context for the client.

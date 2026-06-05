@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 	"github.com/flagmint/flagmint-go/transport"
 	"go.uber.org/goleak"
-	"nhooyr.io/websocket"
-	"nhooyr.io/websocket/wsjson"
 )
 
 // wsMessage mirrors the wire format used by the WebSocket transport.
@@ -71,7 +71,7 @@ func TestWebSocketTransport_ConnectAndReceiveFlags(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer tr.Close() //nolint:errcheck
@@ -117,7 +117,7 @@ func TestWebSocketTransport_FetchFlags(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer tr.Close() //nolint:errcheck
@@ -152,7 +152,7 @@ func TestWebSocketTransport_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestWebSocketTransport_Close_Idempotent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	if err := tr.Close(); err != nil {
@@ -236,7 +236,7 @@ func TestWebSocketTransport_Reconnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer tr.Close() //nolint:errcheck

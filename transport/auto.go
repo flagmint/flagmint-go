@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // AutoTransport attempts to connect via WebSocket first; on failure it falls
@@ -43,20 +44,23 @@ func (t *AutoTransport) OnFlagsUpdated(fn func(flags map[string]any)) {
 	t.onUpdated = fn
 }
 
-// Connect attempts WebSocket first. If the WebSocket dial fails it transparently
-// switches to HTTP long-polling. Blocks until the chosen transport is ready or
-// ctx is cancelled.
-func (t *AutoTransport) Connect(ctx context.Context) error {
+// Connect attempts WebSocket first with the given evaluation context.
+// If the WebSocket dial fails it transparently switches to HTTP long-polling.
+// Blocks until the chosen transport is ready or ctx is cancelled.
+func (t *AutoTransport) Connect(ctx context.Context, evalCtx map[string]any) error {
 	t.cbMu.Lock()
 	cb := t.onUpdated
 	t.cbMu.Unlock()
 
-	// Try WebSocket.
+	// Try WebSocket with a dedicated timeout for the connection attempt.
 	ws := NewWebSocketTransport(t.wsEndpoint, t.apiKey, t.logger)
 	if cb != nil {
 		ws.OnFlagsUpdated(cb)
 	}
-	if err := ws.Connect(ctx); err == nil {
+	// Use a separate context with a reasonable timeout for WebSocket handshake.
+	ws_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ws.Connect(ws_ctx, evalCtx); err == nil {
 		t.active = ws
 		t.logger.Info("auto transport: using WebSocket")
 		return nil
@@ -70,7 +74,7 @@ func (t *AutoTransport) Connect(ctx context.Context) error {
 	if cb != nil {
 		h.OnFlagsUpdated(cb)
 	}
-	if err := h.Connect(ctx); err != nil {
+	if err := h.Connect(ctx, evalCtx); err != nil {
 		return err
 	}
 	t.active = h

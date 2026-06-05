@@ -47,7 +47,7 @@ func TestHTTPTransport_Connect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer tr.Close() //nolint:errcheck
@@ -87,7 +87,7 @@ func TestHTTPTransport_FetchFlags(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer tr.Close() //nolint:errcheck
@@ -122,7 +122,7 @@ func TestHTTPTransport_APIKeyHeader(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer tr.Close() //nolint:errcheck
@@ -153,8 +153,8 @@ func TestHTTPTransport_BackoffOnError(t *testing.T) {
 	defer cancel()
 
 	// Connect will fail on initial fetch, then poll loop will retry with backoff.
-	_ = tr.Connect(ctx) // may fail since server returns errors
-	defer tr.Close()    //nolint:errcheck
+	_ = tr.Connect(ctx, map[string]any{}) // may fail since server returns errors
+	defer tr.Close()                      //nolint:errcheck
 
 	// Give the poll loop some time to run.
 	time.Sleep(500 * time.Millisecond)
@@ -191,7 +191,7 @@ func TestHTTPTransport_PollCycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer tr.Close() //nolint:errcheck
@@ -225,7 +225,7 @@ func TestHTTPTransport_Close_Idempotent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	if err := tr.Close(); err != nil {
@@ -250,7 +250,7 @@ func TestHTTPTransport_Close_BlocksUntilGoroutineExit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 

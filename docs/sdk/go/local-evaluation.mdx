@@ -1,0 +1,168 @@
+---
+title: "Go SDK — Local Evaluation"
+description: "Evaluate feature flags entirely in-process — no network round-trip per evaluation."
+---
+
+## Overview
+
+By default the Flagmint Go SDK uses **remote evaluation**: the flag value is
+computed server-side on each request and streamed to the client. **Local
+evaluation** moves the computation into the client process using downloaded
+rule configurations.
+
+```
+Remote evaluation                Local evaluation
+─────────────────                ────────────────
+Client → Server: context         Client: evaluates locally
+Client ← Server: flag value      (only config download needed)
+```
+
+## When to Use Local Evaluation
+
+| Use case | Recommendation |
+|----------|---------------|
+| Server-side, high-throughput applications | ✅ Local — sub-millisecond latency, no per-flag network calls |
+| Batch jobs / data pipelines | ✅ Local — evaluate millions of flags offline |
+| Client-side applications (browser, mobile) | ⚠️ Remote — full flag configs expose your rule logic |
+| Low-traffic services that can tolerate 5–50 ms | Remote is simpler |
+
+## Performance Characteristics
+
+| Aspect | Remote | Local |
+|--------|--------|-------|
+| Latency per flag | 5–50 ms | < 0.1 ms |
+| Network dependency | Every evaluation | Config fetch only |
+| Billing | Per evaluation call | Per config fetch |
+| Flag config visibility | Server-side only | Full config on client |
+| Offline resilience | ❌ | ✅ (once config is downloaded) |
+
+## Enabling Local Evaluation
+
+Pass `WithLocalEvaluation()` when constructing the client:
+
+```go
+client, err := flagmint.NewClient("fm_sdk_your_api_key",
+    flagmint.WithLocalEvaluation(),
+    flagmint.WithContext(flagmint.EvaluationContext{
+        Kind: "user",
+        Key:  "user-456",
+        Attributes: map[string]any{
+            "country": "FR",
+            "plan":    "growth",
+        },
+    }),
+)
+```
+
+## Supplying Flag Configurations
+
+In local evaluation mode, evaluations use `FlagConfig` objects that describe
+targeting rules and variations. Fetch them from the `/evaluator/config`
+endpoint and call `SetFlagConfigs` whenever the config changes:
+
+```go
+import "github.com/flagmint/flagmint-go/evaluate"
+
+darkMode := &evaluate.FlagConfig{
+    Key:          "dark-mode",
+    Type:         evaluate.FlagTypeBoolean,
+    IsActive:     true,
+    DefaultValue: false,
+    Variations: []evaluate.Variation{
+        {ID: "v-off", Value: false},
+        {ID: "v-on", Value: true},
+    },
+    TargetingRules: []evaluate.TargetingRule{
+        {
+            ID:        "rule-pro-users",
+            Kind:      "custom",
+            LogicalOp: evaluate.LogicalAND,
+            Conditions: []evaluate.Condition{
+                {
+                    Attribute: "plan",
+                    Operator:  evaluate.OpEquals,
+                    Value:     "pro",
+                },
+            },
+            VariationID: strPtr("v-on"),
+        },
+    },
+}
+// HydrateVariations must be called once to build the internal lookup map.
+darkMode.HydrateVariations()
+
+client.SetFlagConfigs(map[string]*evaluate.FlagConfig{
+    "dark-mode": darkMode,
+})
+```
+
+`SetFlagConfigs` replaces the entire config map atomically. Call it again
+whenever you receive an updated config from the server.
+
+## Evaluating Flags
+
+Use the same typed methods as with remote evaluation:
+
+```go
+// Evaluation is fully local — no network round-trip
+enabled := client.BoolFlag("dark-mode", false)
+limit := client.NumberFlag("max-upload-mb", 10)
+```
+
+`BoolFlag`, `StringFlag`, and `NumberFlag` all route through the local
+evaluator when `WithLocalEvaluation()` is active.
+
+## Targeting Rules
+
+`FlagConfig.TargetingRules` is evaluated in ascending `OrderIndex` order. The
+first rule whose conditions are all satisfied wins.
+
+### Supported operators
+
+| Operator | Constant | Description |
+|----------|----------|-------------|
+| Equals | `evaluate.OpEquals` | Strict equality |
+| Not equals | `evaluate.OpNotEquals` | Inverse equality |
+| Contains | `evaluate.OpContains` | Substring / set membership |
+| Not contains | `evaluate.OpNotContains` | Inverse |
+| Starts with | `evaluate.OpStartsWith` | String prefix |
+| Ends with | `evaluate.OpEndsWith` | String suffix |
+| Greater than | `evaluate.OpGreaterThan` | Numeric comparison |
+| Less than | `evaluate.OpLessThan` | Numeric comparison |
+| Greater than or equal | `evaluate.OpGreaterThanOrEqual` | Numeric comparison |
+| Less than or equal | `evaluate.OpLessThanOrEqual` | Numeric comparison |
+
+### Percentage rollouts
+
+Use `TargetingRule.RolloutPercentage` to do a stable, deterministic percentage
+rollout based on the user key:
+
+```go
+evaluate.TargetingRule{
+    ID:                 "rollout-50",
+    Kind:               "rollout",
+    RolloutPercentage:  float64Ptr(50),
+    VariationID:        strPtr("v-on"),
+}
+```
+
+## Architecture
+
+```
+┌──────────────────────────────────────┐
+│              FlagClient               │
+│                                      │
+│  ┌──────────┐   ┌─────────────────┐  │
+│  │Transport │   │  LocalEvaluator │  │
+│  │(WS/HTTP) │   │  (evaluate pkg) │  │
+│  └────┬─────┘   └────────┬────────┘  │
+│       │  config updates  │           │
+│       └──────────────────┘           │
+│            SetFlagConfigs            │
+└──────────────────────────────────────┘
+```
+
+The transport layer is still used to receive config updates from the server.
+`SetFlagConfigs` bridges the transport and the local evaluator.
+
+> **Management API coming soon.** Automated config sync (calling `SetFlagConfigs` automatically when the server pushes a new config) will be added in a future release.

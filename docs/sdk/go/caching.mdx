@@ -1,0 +1,135 @@
+---
+title: "Go SDK — Caching"
+description: "Built-in in-memory cache, TTL configuration, and custom cache adapters."
+---
+
+## Overview
+
+The Flagmint Go SDK supports pluggable caching via the `CacheAdapter`
+interface. Caching serves two purposes:
+
+1. **Fast cold start** — cached flags are served immediately on startup while
+   the transport reconnects, avoiding a blank period with no flag values.
+2. **Degraded-mode support** — if the transport fails to connect and the cache
+   has valid data, `Ready` still succeeds (with a non-fatal error reported via
+   `WithOnError`).
+
+## Default Cache
+
+Enable the built-in in-memory cache:
+
+```go
+client, _ := flagmint.NewClient(apiKey,
+    flagmint.WithCache(true),
+)
+```
+
+The default cache uses a **24-hour TTL** for flags. The evaluation context has
+no TTL and persists until overwritten. All operations are goroutine-safe.
+
+The in-memory cache is scoped to a single process. If you have multiple
+server replicas or need persistence across restarts, use a custom adapter.
+
+## Custom Cache Adapters
+
+Implement the `CacheAdapter` interface to back the cache with any external
+store:
+
+```go
+type CacheAdapter interface {
+    // LoadFlags returns cached flags for the given API key, or nil if
+    // no valid (non-expired) cache entry exists.
+    LoadFlags(apiKey string) (*FeatureFlags, error)
+
+    // SaveFlags persists flags for the given API key.
+    SaveFlags(apiKey string, flags FeatureFlags) error
+
+    // LoadContext returns the cached evaluation context, or nil.
+    LoadContext(apiKey string) (*EvaluationContext, error)
+
+    // SaveContext persists the evaluation context.
+    SaveContext(apiKey string, ctx *EvaluationContext) error
+}
+```
+
+`FeatureFlags` implements `json.Marshaler` / `json.Unmarshaler`, so adapters
+can serialise it with `json.Marshal(flags)` and restore it with
+`json.Unmarshal(data, &flags)`.
+
+### Redis example
+
+```go
+type RedisCacheAdapter struct {
+    client *redis.Client
+    ttl    time.Duration
+}
+
+func (r *RedisCacheAdapter) SaveFlags(apiKey string, flags flagmint.FeatureFlags) error {
+    raw, err := json.Marshal(flags)
+    if err != nil {
+        return err
+    }
+    return r.client.Set(context.Background(), "flagmint:flags:"+apiKey, raw, r.ttl).Err()
+}
+
+func (r *RedisCacheAdapter) LoadFlags(apiKey string) (*flagmint.FeatureFlags, error) {
+    raw, err := r.client.Get(context.Background(), "flagmint:flags:"+apiKey).Bytes()
+    if err == redis.Nil {
+        return nil, nil // cache miss
+    }
+    if err != nil {
+        return nil, err
+    }
+    var flags flagmint.FeatureFlags
+    if err := json.Unmarshal(raw, &flags); err != nil {
+        return nil, err
+    }
+    return &flags, nil
+}
+
+// ... implement LoadContext and SaveContext similarly ...
+```
+
+See the full example in
+[`examples/custom-cache/main.go`](https://github.com/flagmint/flagmint-go/tree/main/examples/custom-cache).
+
+### Registering a custom adapter
+
+```go
+client, _ := flagmint.NewClient(apiKey,
+    flagmint.WithCacheAdapter(myRedisAdapter),
+)
+```
+
+`WithCacheAdapter` automatically enables caching; there is no need to also
+pass `WithCache(true)`.
+
+## Cache Keys
+
+The SDK uses the API key string as the cache key discriminator, so multiple
+`FlagClient` instances pointing at different API keys can share the same
+adapter without collision.
+
+## TTL and Expiry
+
+| Data | Default TTL | Constant |
+|------|-------------|----------|
+| Flags | 24 hours | `flagmint.DefaultCacheTTL` |
+| Evaluation context | No expiry | — |
+
+Custom adapters are responsible for enforcing their own TTL; the SDK does not
+call a separate "purge" method.
+
+## NopCache
+
+The `cache` sub-package ships a `NopCache` that discards all writes and always
+returns a cache miss. It can be used in tests or when you want to disable
+caching while still satisfying the `CacheAdapter` interface:
+
+```go
+import "github.com/flagmint/flagmint-go/cache"
+
+client, _ := flagmint.NewClient(apiKey,
+    flagmint.WithCacheAdapter(cache.NewNopCache()),
+)
+```
