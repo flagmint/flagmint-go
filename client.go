@@ -24,14 +24,14 @@ type FlagClient struct {
 	logger    *slog.Logger
 
 	// Local evaluation
-	evaluator      *evaluate.Evaluator
-	flagConfigsMu  sync.RWMutex
-	flagConfigs    map[string]*evaluate.FlagConfig
+	evaluator     *evaluate.Evaluator
+	flagConfigsMu sync.RWMutex
+	flagConfigs   map[string]*evaluate.FlagConfig
 
 	// Lifecycle
 	initOnce    sync.Once
 	readyCh     chan struct{} // closed when flags are available
-	readyErr    error        // set before readyCh is closed (if error)
+	readyErr    error         // set before readyCh is closed (if error)
 	cancelFunc  context.CancelFunc
 	internalCtx context.Context
 
@@ -166,8 +166,20 @@ func (c *FlagClient) initialize() {
 		}
 	}
 
-	// Connect the transport; pass internal context so Close cancels it.
-	if err := c.transport.Connect(c.internalCtx); err != nil {
+	// Connect the transport with initial evaluation context.
+	evalCtx := c.evalCtx.Load()
+	if evalCtx == nil {
+		evalCtx = &EvaluationContext{}
+	}
+
+	// Convert evaluation context to map for transport
+	evalCtxMap, err := evalContextToMap(*evalCtx)
+	if err != nil {
+		c.logger.Warn("flagmint: failed to marshal evaluation context", "err", err)
+		evalCtxMap = make(map[string]any) // Fall back to empty context
+	}
+
+	if err := c.transport.Connect(c.internalCtx, evalCtxMap); err != nil {
 		if hasCachedFlags {
 			// Degraded mode: return success but report the error.
 			if c.cfg.onError != nil {
@@ -176,6 +188,13 @@ func (c *FlagClient) initialize() {
 			c.readyErr = nil
 		} else {
 			c.readyErr = err
+		}
+	} else {
+		// Fetch flags with the current evaluation context on initial connect.
+		if evalCtx := c.evalCtx.Load(); evalCtx != nil {
+			c.doFetchFlags(*evalCtx)
+		} else {
+			c.doFetchFlags(EvaluationContext{})
 		}
 	}
 
@@ -234,39 +253,64 @@ func (c *FlagClient) SetFlagConfigs(configs map[string]*evaluate.FlagConfig) {
 }
 
 // Bool returns the boolean value of flag key, or fallback if the flag is absent
-// or not a bool.
+// or not a bool. When local evaluation is enabled, delegates to [FlagClient.GetFlag].
 func (c *FlagClient) Bool(key string, fallback bool) bool {
+	if c.cfg.localEvaluation {
+		v, ok := c.GetFlag(key, fallback).(bool)
+		if !ok {
+			return fallback
+		}
+		return v
+	}
 	return c.GetFlags().Bool(key, fallback)
 }
 
 // BoolFlag is a typed convenience method. Returns fallback if the flag
-// doesn't exist or isn't a bool.
+// doesn't exist or isn't a bool. When local evaluation is enabled, the flag
+// is evaluated locally against the configured [evaluate.FlagConfig] rules.
 func (c *FlagClient) BoolFlag(key string, fallback bool) bool {
-	return c.GetFlags().Bool(key, fallback)
+	return c.Bool(key, fallback)
 }
 
 // String returns the string value of flag key, or fallback if the flag is absent
-// or not a string.
+// or not a string. When local evaluation is enabled, delegates to [FlagClient.GetFlag].
 func (c *FlagClient) String(key string, fallback string) string {
+	if c.cfg.localEvaluation {
+		v, ok := c.GetFlag(key, fallback).(string)
+		if !ok {
+			return fallback
+		}
+		return v
+	}
 	return c.GetFlags().String(key, fallback)
 }
 
 // StringFlag is a typed convenience method. Returns fallback if the flag
-// doesn't exist or isn't a string.
+// doesn't exist or isn't a string. When local evaluation is enabled, the flag
+// is evaluated locally against the configured [evaluate.FlagConfig] rules.
 func (c *FlagClient) StringFlag(key string, fallback string) string {
-	return c.GetFlags().String(key, fallback)
+	return c.String(key, fallback)
 }
 
 // Float64 returns the numeric value of flag key, or fallback if the flag is absent
-// or not a float64.
+// or not a float64. When local evaluation is enabled, delegates to [FlagClient.GetFlag].
 func (c *FlagClient) Float64(key string, fallback float64) float64 {
+	if c.cfg.localEvaluation {
+		v, ok := c.GetFlag(key, fallback).(float64)
+		if !ok {
+			return fallback
+		}
+		return v
+	}
 	return c.GetFlags().Float64(key, fallback)
 }
 
 // NumberFlag is a typed convenience method. Flags are float64 internally.
-// Returns fallback if the flag doesn't exist or isn't a float64.
+// Returns fallback if the flag doesn't exist or isn't a float64. When local
+// evaluation is enabled, the flag is evaluated locally against the configured
+// [evaluate.FlagConfig] rules.
 func (c *FlagClient) NumberFlag(key string, fallback float64) float64 {
-	return c.GetFlags().Float64(key, fallback)
+	return c.Float64(key, fallback)
 }
 
 // JSON unmarshals a JSON flag configuration into target (must be a pointer).
@@ -317,6 +361,12 @@ func (c *FlagClient) fetchFlagsForContext(ctx EvaluationContext) {
 	if c.readyErr != nil {
 		return
 	}
+	c.doFetchFlags(ctx)
+}
+
+// doFetchFlags performs the actual flag fetch without waiting for readyCh.
+// Used both by fetchFlagsForContext and during initialization.
+func (c *FlagClient) doFetchFlags(ctx EvaluationContext) {
 	evalMap, err := evalContextToMap(ctx)
 	if err != nil {
 		if c.cfg.onError != nil {
@@ -393,6 +443,7 @@ func (c *FlagClient) Close() error {
 // onFlagsReceived is registered with the transport and called whenever a new
 // raw flag payload arrives from the backend.
 func (c *FlagClient) onFlagsReceived(raw map[string]any) {
+	c.logger.Debug("flagmint: received flags from transport", "flags", raw)
 	c.updateFlags(NewFeatureFlags(raw))
 }
 
@@ -400,7 +451,7 @@ func (c *FlagClient) onFlagsReceived(raw map[string]any) {
 // notifies all registered subscribers. It is the single write path for flag state.
 func (c *FlagClient) updateFlags(flags FeatureFlags) {
 	c.flags.Store(flags)
-	c.logger.Info("flagmint: flags updated", "count", flags.Len())
+	c.logger.Info("flagmint: flags updated", "count", flags.Len(), "flags", flags.ToMap())
 
 	if c.cache != nil {
 		if err := c.cache.SaveFlags(c.cfg.apiKey, flags); err != nil {

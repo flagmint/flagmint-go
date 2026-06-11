@@ -1,0 +1,120 @@
+---
+title: "Go SDK — Transport"
+description: "WebSocket vs HTTP long-polling, reconnection behaviour, and fallback strategy."
+---
+
+## Overview
+
+The Flagmint Go SDK maintains a persistent connection to the backend to receive
+real-time flag updates. Two transport implementations are available:
+
+| Transport | Mode constant | Protocol |
+|-----------|---------------|----------|
+| WebSocket | `TransportWebSocket` | `wss://` — full-duplex, low overhead |
+| HTTP long-polling | `TransportLongPolling` | `https://` — request/response with long timeout |
+
+The default `TransportAuto` mode tries WebSocket first and transparently falls
+back to HTTP if the connection cannot be established.
+
+## Choosing a Transport
+
+```go
+// Auto (default) — tries WebSocket, falls back to HTTP
+client, _ := flagmint.NewClient(apiKey)
+
+// Force WebSocket
+client, _ := flagmint.NewClient(apiKey,
+    flagmint.WithTransportMode(flagmint.TransportWebSocket),
+)
+
+// Force HTTP long-polling
+client, _ := flagmint.NewClient(apiKey,
+    flagmint.WithTransportMode(flagmint.TransportLongPolling),
+)
+```
+
+### When to use WebSocket
+
+- Long-running server processes (API servers, background workers)
+- Environments where WebSocket is not blocked
+- When you need the lowest possible flag update latency
+
+### When to use HTTP long-polling
+
+- Serverless functions (AWS Lambda, Cloud Run) where persistent connections
+  are not maintained between invocations
+- Environments behind proxies that strip WebSocket upgrade headers
+- Corporate networks that block WebSocket connections
+
+## Endpoint Configuration
+
+By default the SDK connects to the Flagmint production endpoints:
+
+| Transport | Default endpoint |
+|-----------|-----------------|
+| REST / HTTP | `https://api.flagmint.com` |
+| WebSocket | `wss://api.flagmint.com` |
+
+Override them with `WithEndpoints` or environment variables:
+
+```go
+// Programmatic override
+flagmint.WithEndpoints(
+    "https://staging-api.flagmint.com",
+    "wss://staging-api.flagmint.com",
+)
+```
+
+```bash
+# Environment variables
+export FLAGMINT_REST_ENDPOINT=https://staging-api.flagmint.com
+export FLAGMINT_WS_ENDPOINT=wss://staging-api.flagmint.com
+# Or use a named environment alias
+export FLAGMINT_ENV=staging   # "local" | "staging" | "prod"
+```
+
+## Reconnection Behaviour
+
+Both transports use an exponential back-off strategy with jitter when a
+connection drops. The back-off is handled by the `internal/backoff` package:
+
+- Initial delay: 250 ms
+- Maximum delay: 30 s
+- Multiplier: 2×
+- Jitter: ±20 %
+
+Reconnection attempts continue indefinitely until the client is closed or the
+internal context is cancelled.
+
+During reconnection, the SDK continues to serve the last known flag values. If
+caching is enabled, these values persist across process restarts too.
+
+## URL Paths
+
+The SDK appends fixed paths to the configured base endpoints:
+
+| Transport | Path appended |
+|-----------|---------------|
+| WebSocket | `/ws/sdk` |
+| HTTP | `/evaluator/evaluate` |
+
+## Auto Transport Fallback
+
+`TransportAuto` (the default) works as follows:
+
+1. Attempt a WebSocket connection.
+2. If the WebSocket connection fails (e.g., `HTTP 426`, proxy rejection), start
+   an HTTP long-polling connection instead.
+3. Subsequent reconnections follow the same precedence.
+
+The fallback is transparent to the caller — `Ready`, `BoolFlag`, and
+`Subscribe` all behave identically regardless of the active transport.
+
+## Flags Received Callback
+
+Internally both transports call an `OnFlagsUpdated` callback whenever a new
+flag payload is received. This triggers `updateFlags`, which:
+
+1. Stores the new values atomically.
+2. Persists them to cache (if enabled).
+3. Notifies all `Subscribe` callbacks.

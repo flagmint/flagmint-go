@@ -141,6 +141,39 @@ func (f FeatureFlags) JSON(key string, target any) error {
 	return json.Unmarshal(b, target)
 }
 
+// ToMap returns a shallow copy of all flag values as a plain map.
+// This is useful for external cache adapters that need to serialise flags.
+func (f FeatureFlags) ToMap() map[string]any {
+	if f.values == nil {
+		return map[string]any{}
+	}
+	m := make(map[string]any, len(f.values))
+	for k, v := range f.values {
+		m[k] = v
+	}
+	return m
+}
+
+// MarshalJSON implements [json.Marshaler] so that [FeatureFlags] can be
+// serialised directly by external cache adapters.
+func (f FeatureFlags) MarshalJSON() ([]byte, error) {
+	if f.values == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(f.values)
+}
+
+// UnmarshalJSON implements [json.Unmarshaler] so that [FeatureFlags] can be
+// deserialised by external cache adapters.
+func (f *FeatureFlags) UnmarshalJSON(data []byte) error {
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	f.values = m
+	return nil
+}
+
 // EvaluationContext is the user/org context sent to the server for evaluation.
 // Mirrors EvaluationContextT from the JS SDK.
 type EvaluationContext struct {
@@ -151,8 +184,53 @@ type EvaluationContext struct {
 	Organization *ContextEntity `json:"organization,omitempty"` // for kind="multi"
 }
 
+// MarshalJSON flattens attributes to the top level for API compatibility.
+func (ec EvaluationContext) MarshalJSON() ([]byte, error) {
+	// Build the output map
+	out := make(map[string]any)
+
+	out["kind"] = ec.Kind
+	if ec.Key != "" {
+		out["key"] = ec.Key
+	}
+
+	// Flatten attributes to top level
+	for k, v := range ec.Attributes {
+		out[k] = v
+	}
+
+	// Include nested contexts for multi-kind
+	if ec.User != nil {
+		out["user"] = ec.User
+	}
+	if ec.Organization != nil {
+		out["organization"] = ec.Organization
+	}
+
+	return json.Marshal(out)
+}
+
 // ContextEntity represents a single entity within a multi-kind context.
 type ContextEntity struct {
+	Kind       string         `json:"kind,omitempty"`
 	Key        string         `json:"key"`
 	Attributes map[string]any `json:"attributes,omitempty"`
+}
+
+// MarshalJSON flattens attributes to the top level for API compatibility.
+func (ce ContextEntity) MarshalJSON() ([]byte, error) {
+	// Build the output map
+	out := make(map[string]any)
+
+	if ce.Kind != "" {
+		out["kind"] = ce.Kind
+	}
+	out["key"] = ce.Key
+
+	// Flatten attributes to top level
+	for k, v := range ce.Attributes {
+		out[k] = v
+	}
+
+	return json.Marshal(out)
 }

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 	"github.com/flagmint/flagmint-go/transport"
 	"go.uber.org/goleak"
-	"nhooyr.io/websocket"
-	"nhooyr.io/websocket/wsjson"
 )
 
 const defaultTestSDKToken = "ff_790d2cdfa5b0b89d43bf45a311341829732e6b5c39c020b45a7080069ba92214"
@@ -45,7 +45,7 @@ func TestAutoTransport_FallbackToHTTP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect (auto fallback): %v", err)
 	}
 	defer tr.Close() //nolint:errcheck
@@ -91,7 +91,7 @@ func TestAutoTransport_WebSocket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer tr.Close() //nolint:errcheck
@@ -120,7 +120,7 @@ func TestAutoTransport_Close_Idempotent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	if err := tr.Close(); err != nil {
@@ -147,7 +147,7 @@ func TestAutoTransport_FetchFlags_Fallback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := tr.Connect(ctx); err != nil {
+	if err := tr.Connect(ctx, map[string]any{}); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer tr.Close() //nolint:errcheck

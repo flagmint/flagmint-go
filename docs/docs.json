@@ -1,0 +1,37 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Flagmint",
+  "navigation": [
+    {
+      "group": "Get Started",
+      "pages": ["introduction", "quickstart"]
+    },
+    {
+      "group": "SDKs",
+      "pages": [
+        {
+          "group": "React",
+          "pages": ["sdk/react/quickstart", "sdk/react/configuration"]
+        },
+        {
+          "group": "Vue.js",
+          "pages": ["sdk/vue/quickstart", "sdk/vue/configuration"]
+        },
+        {
+          "group": "Node.js",
+          "pages": ["sdk/node/quickstart", "sdk/node/configuration"]
+        },
+        {
+          "group": "Go",
+          "pages": [
+            "sdk/go/quickstart",
+            "sdk/go/configuration",
+            "sdk/go/local-evaluation",
+            "sdk/go/transport",
+            "sdk/go/caching"
+          ]
+        }
+      ]
+    }
+  ]
+}

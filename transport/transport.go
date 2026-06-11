@@ -6,9 +6,10 @@ import "context"
 // Transport abstracts the communication layer between the SDK and Flagmint servers.
 // Implementations must be safe for concurrent use after Connect() returns.
 type Transport interface {
-	// Connect establishes the connection. Blocks until the transport is ready
-	// to send/receive, or ctx is cancelled.
-	Connect(ctx context.Context) error
+	// Connect establishes the connection with optional initial evaluation context.
+	// The context is sent in the x-flagmint-context header if provided.
+	// Blocks until the transport is ready to send/receive, or ctx is cancelled.
+	Connect(ctx context.Context, evalCtx map[string]any) error
 
 	// FetchFlags sends the evaluation context to the server and returns the
 	// evaluated flag set. evalCtx is a map representation of the evaluation

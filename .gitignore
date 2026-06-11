@@ -1,0 +1,6 @@
+.env
+coverage.html
+coverage.out
+debug
+basic
+local-eval

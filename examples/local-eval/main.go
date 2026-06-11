@@ -4,15 +4,26 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 
 	flagmint "github.com/flagmint/flagmint-go"
 	"github.com/flagmint/flagmint-go/evaluate"
+	"github.com/flagmint/flagmint-go/examples/util"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Load environment variables from .env file (if it exists)
+	_ = godotenv.Load()
+
+	token := os.Getenv("FLAGMINT_SDK_TOKEN")
+	if token == "" {
+		token = "demo-api-key"
+	}
+	fmt.Printf("Using SDK token: %s\n", util.MaskToken(token))
 	// Create a client with local evaluation enabled (no transport connection
 	// needed when using manually supplied flag configs).
-	client, err := flagmint.NewClient("demo-api-key",
+	client, err := flagmint.NewClient(token,
 		flagmint.WithContext(flagmint.EvaluationContext{
 			Kind: "user",
 			Key:  "user-456",

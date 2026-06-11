@@ -3,6 +3,7 @@ package transport
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -92,16 +93,23 @@ func (t *HTTPTransport) OnFlagsUpdated(fn func(flags map[string]any)) {
 }
 
 // Connect makes an initial flag fetch attempt and starts the background poll loop.
+// The evalCtx parameter provides the initial evaluation context to use for polling.
 // If the initial fetch fails (e.g. server unreachable), Connect logs a warning
 // and starts the poll loop anyway; retries will happen at the configured interval.
 // Connect blocks until the poll loop is started or ctx is cancelled.
-func (t *HTTPTransport) Connect(ctx context.Context) error {
+func (t *HTTPTransport) Connect(ctx context.Context, evalCtx map[string]any) error {
 	inner, cancel := context.WithCancel(context.Background())
 	t.innerCtx = inner
 	t.innerCancel = cancel
 
+	t.mu.Lock()
+	if len(evalCtx) > 0 {
+		t.lastEvalCtx = evalCtx
+	}
+	t.mu.Unlock()
+
 	// Attempt an initial fetch. Failure is non-fatal — the poll loop will retry.
-	flags, err := t.postEvaluate(ctx, nil)
+	flags, err := t.postEvaluate(ctx, evalCtx)
 	if err != nil {
 		if ctx.Err() != nil {
 			cancel()
@@ -207,6 +215,8 @@ func (t *HTTPTransport) postEvaluate(ctx context.Context, evalCtx map[string]any
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
+	t.logger.Info("sending context to API via HTTP", "json", string(data), "evalCtx", evalCtx)
+
 	url := t.endpoint + evaluatePath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
@@ -214,6 +224,20 @@ func (t *HTTPTransport) postEvaluate(ctx context.Context, evalCtx map[string]any
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", t.apiKey)
+
+	// Add context as header if it exists and is not empty
+	if len(evalCtx) > 0 {
+		contextJSON, err := json.Marshal(evalCtx)
+		if err == nil {
+			// Base64 encode for safe header transmission
+			contextB64 := base64.StdEncoding.EncodeToString(contextJSON)
+			req.Header.Set("x-flagmint-context", contextB64)
+			t.logger.Debug("sending context via header", "base64", contextB64)
+		} else {
+			t.logger.Warn("failed to marshal context for header", "err", err)
+		}
+	}
+
 	// Add rate limit bypass token if available
 	if token := os.Getenv("RATE_LIMIT_BYPASS_TOKEN"); token != "" {
 		req.Header.Set("x-bypass-rate-limit", token)
@@ -233,6 +257,8 @@ func (t *HTTPTransport) postEvaluate(ctx context.Context, evalCtx map[string]any
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
+
+	t.logger.Debug("received response from API", "statusCode", resp.StatusCode, "responseBody", string(respData))
 
 	var flags map[string]any
 	if err := json.Unmarshal(respData, &flags); err != nil {
